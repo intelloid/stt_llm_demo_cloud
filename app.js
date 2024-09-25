@@ -6,21 +6,55 @@ var ws;
 const urlParams = new URLSearchParams(window.location.search);
 const langParam = urlParams.get("language");
 var webServerURL =
-  "wss://nlu-00.intelloia.com:38743/intelloid-STT-stream-web/websocket";
+  "wss://nlu-00.intelloia.com:38643/intelloid-STT-stream-web/websocket";
 if (langParam) webServerURL = webServerURL + "?language=" + langParam;
+let temporaryResult = ""; // PARTIAL 상태일 때의 임시 결과 저장
 
-//show transcribing result text string
+// show transcribing result text string
+// show transcribing result text string
 function printSttResult(result, status) {
   var resultElement = document.getElementById("sttresult");
-  if (status == "FINAL") {
+
+  if (status === "FINAL") {
+    // FINAL 상태일 때 고정된 텍스트 추가
     resultElement.style.color = "black";
-    resultElement.value += result + "\n"; // 기존 텍스트 보존하고 추가하기
+
+    // 기존 텍스트에서 PARTIAL 텍스트 제거
+    if (temporaryResult) {
+      resultElement.value = resultElement.value.replace(temporaryResult, ""); // 이전 PARTIAL 텍스트 제거
+    }
+
+    // 최종적으로 FINAL 텍스트 추가 (추가적인 줄바꿈 방지)
+    resultElement.value = resultElement.value.trim() + "\n" + result + "\n";
+
+    temporaryResult = ""; // 임시 PARTIAL 결과 초기화
     resultElement.scrollTop = resultElement.scrollHeight; // 스크롤을 항상 최하단으로 유지
-  } else if (status == "PARTIAL") {
+  } else if (status === "PARTIAL") {
+    // PARTIAL 상태일 때는 임시로 화면 맨 아래에 보여줌
     resultElement.style.color = "gray";
-  } else if (status == "FINAL_A1") {
+
+    // 이전 PARTIAL 텍스트가 이미 있을 경우 이를 먼저 제거
+    if (temporaryResult) {
+      resultElement.value = resultElement.value.replace(temporaryResult, "");
+    }
+
+    temporaryResult = result; // 임시 PARTIAL 결과 업데이트
+
+    // PARTIAL 텍스트를 기존 텍스트 아래에 추가
+    resultElement.value = resultElement.value.trim() + "\n" + temporaryResult;
+    resultElement.scrollTop = resultElement.scrollHeight; // 스크롤을 항상 최하단으로 유지
+  } else if (status === "FINAL_A1") {
+    // FINAL_A1 상태의 결과 고정
     resultElement.style.color = "blue";
-    resultElement.value += result + "\n"; // 기존 텍스트 보존하고 추가하기
+
+    // 기존 텍스트에 FINAL_A1 상태 텍스트 추가
+    if (temporaryResult) {
+      resultElement.value = resultElement.value.replace(temporaryResult, ""); // 이전 PARTIAL 텍스트 제거
+    }
+
+    resultElement.value = resultElement.value.trim() + "\n" + result + "\n";
+
+    temporaryResult = ""; // 임시 PARTIAL 결과 초기화
     resultElement.scrollTop = resultElement.scrollHeight; // 스크롤을 항상 최하단으로 유지
   }
 }
@@ -28,14 +62,15 @@ function printSttResult(result, status) {
 // LLM 분석 결과 출력 함수
 function printLLMResult(llmText) {
   var llmResultElement = document.getElementById("llmresult");
-  llmResultElement.value = "LLM analysis result: " + llmText;
+  llmResultElement.value = "LLM analysis result: \n" + llmText;
   llmResultElement.scrollTop = llmResultElement.scrollHeight; // 스크롤을 항상 최하단으로 유지
 }
 
 // LLM API 호출 함수
 function sendSttResultForLLMAnalysis(sttText) {
-  fetch("http://10.10.123.60:22223/dent_summary", {
+  fetch("/api/dent_summary", {
     method: "POST",
+    credentials: "same-origin",
     headers: {
       "Content-Type": "application/json",
     },
@@ -43,10 +78,16 @@ function sendSttResultForLLMAnalysis(sttText) {
       text: sttText,
     }),
   })
-    .then((response) => response.json())
+    .then((response) => {
+      if (response.ok) {
+        return response.json();
+      } else {
+        throw new Error("LLM analysis failed.");
+      }
+    })
     .then((data) => {
-      if (data && data.summary) {
-        printLLMResult(data.summary); // API에서 반환된 요약을 LLM textarea에 표시
+      if (data && data.result) {
+        printLLMResult(data.result); // 요약 결과 출력
       } else {
         printLLMResult("LLM analysis failed.");
       }
@@ -57,6 +98,15 @@ function sendSttResultForLLMAnalysis(sttText) {
     });
 }
 
+// STT와 LLM 결과 초기화 함수
+function clearResults() {
+  var sttResult = document.getElementById("sttresult");
+  var llmResult = document.getElementById("llmresult");
+  sttResult.value = ""; // STT 결과 초기화
+  llmResult.value = ""; // LLM 결과 초기화
+  console.log("STT and LLM results cleared");
+}
+
 // Init & load
 document.addEventListener("DOMContentLoaded", function () {
   var micBtn = document.querySelector("#micBtn");
@@ -64,6 +114,9 @@ document.addEventListener("DOMContentLoaded", function () {
   var llmResult = document.getElementById("llmresult");
 
   micBtn.onclick = function () {
+    // 마이크가 켜질 때 STT와 LLM 초기화
+    clearResults();
+
     if (wavesurfer === undefined) {
       if (isSafari) {
         var AudioContext = window.AudioContext || window.webkitAudioContext;
@@ -108,14 +161,17 @@ document.addEventListener("DOMContentLoaded", function () {
             obj.status == "PARTIAL" ||
             obj.status == "FINAL_A1"
           ) {
-            if (obj.results[0].sentence != "") {
-              printSttResult(obj.results[0].sentence, obj.status);
-              var result = obj.results[0].sentence;
-              console.info(result);
-              if (result.includes("stop") == true) micBtn.click();
+            if (obj.results[0].sentence != 0) {
+              var trimmedResult = obj.results[0].sentence.trim();
+              printSttResult(trimmedResult, obj.status);
+              console.info(trimmedResult);
+              console.log("test", obj);
 
-              // LLM 분석 결과 추가 (예시 텍스트)
-              printLLMResult("This is an example of LLM analysis output.");
+              if (trimmedResult.includes("stop")) {
+                console.log("Condition met: 'stop' found in sentence.");
+                printLLMResult("Converting...");
+                micBtn.click(); // 마이크 중지
+              }
             }
           }
         }
@@ -137,6 +193,7 @@ document.addEventListener("DOMContentLoaded", function () {
       if (wavesurfer.microphone.active) {
         wavesurfer.microphone.stop();
         ws.close();
+        console.log("Microphone stopped");
 
         // STT 내용을 LLM API로 전송
         var sttText = sttResult.value.trim();
@@ -147,6 +204,9 @@ document.addEventListener("DOMContentLoaded", function () {
         }
       } else {
         wavesurfer.microphone.start();
+
+        console.log("Microphone started");
+
         ws = new WebSocket(webServerURL);
         ws.onmessage = function (event) {
           if (event.data != "") {
