@@ -5,57 +5,44 @@ var wavesurfer, context, processor;
 var ws;
 const urlParams = new URLSearchParams(window.location.search);
 const langParam = urlParams.get("language");
-var webServerURL =
-  "wss://nlu-00.intelloia.com:38643/intelloid-STT-stream-web/websocket";
-if (langParam) webServerURL = webServerURL + "?language=" + langParam;
+let accessToken =
+  "eyJhbGciOiJIUzUxMiJ9.eyJ0eXBlIjoibWFpbiIsInVzZXJJZCI6IjE5IiwiYXV0aG9yaXRpZXMiOiJVU0VSIiwiaXNzIjoiSW50ZWxsb2lkIiwiaWF0IjoxNzI5ODE1ODMyLCJleHAiOjE3Mjk4NTE4MzJ9.9OzWCdR1TBwc0B_PTICYoJK_0sUjhbIg1nmhZlpxOQRwBHnmjSHOHxYEsbIcAQym_fXgIgYOyw8gxul_utBvgA";
+let userId = 19;
+let sttToken;
+let webServerURL = `wss://medvoice.intelloia.com/api/stt?token=${sttToken}`;
 let temporaryResult = ""; // PARTIAL 상태일 때의 임시 결과 저장
+let llmToken;
 
-// show transcribing result text string
-// show transcribing result text string
+if (langParam) webServerURL = webServerURL + "?language=" + langParam;
+
+// STT 결과 출력 함수
 function printSttResult(result, status) {
   var resultElement = document.getElementById("sttresult");
 
   if (status === "FINAL") {
-    // FINAL 상태일 때 고정된 텍스트 추가
     resultElement.style.color = "black";
-
-    // 기존 텍스트에서 PARTIAL 텍스트 제거
-    if (temporaryResult) {
-      resultElement.value = resultElement.value.replace(temporaryResult, ""); // 이전 PARTIAL 텍스트 제거
-    }
-
-    // 최종적으로 FINAL 텍스트 추가 (추가적인 줄바꿈 방지)
-    resultElement.value = resultElement.value.trim() + "\n" + result + "\n";
-
-    temporaryResult = ""; // 임시 PARTIAL 결과 초기화
-    resultElement.scrollTop = resultElement.scrollHeight; // 스크롤을 항상 최하단으로 유지
-  } else if (status === "PARTIAL") {
-    // PARTIAL 상태일 때는 임시로 화면 맨 아래에 보여줌
-    resultElement.style.color = "gray";
-
-    // 이전 PARTIAL 텍스트가 이미 있을 경우 이를 먼저 제거
     if (temporaryResult) {
       resultElement.value = resultElement.value.replace(temporaryResult, "");
     }
-
-    temporaryResult = result; // 임시 PARTIAL 결과 업데이트
-
-    // PARTIAL 텍스트를 기존 텍스트 아래에 추가
-    resultElement.value = resultElement.value.trim() + "\n" + temporaryResult;
-    resultElement.scrollTop = resultElement.scrollHeight; // 스크롤을 항상 최하단으로 유지
-  } else if (status === "FINAL_A1") {
-    // FINAL_A1 상태의 결과 고정
-    resultElement.style.color = "blue";
-
-    // 기존 텍스트에 FINAL_A1 상태 텍스트 추가
-    if (temporaryResult) {
-      resultElement.value = resultElement.value.replace(temporaryResult, ""); // 이전 PARTIAL 텍스트 제거
-    }
-
     resultElement.value = resultElement.value.trim() + "\n" + result + "\n";
-
-    temporaryResult = ""; // 임시 PARTIAL 결과 초기화
-    resultElement.scrollTop = resultElement.scrollHeight; // 스크롤을 항상 최하단으로 유지
+    temporaryResult = "";
+    resultElement.scrollTop = resultElement.scrollHeight;
+  } else if (status === "PARTIAL") {
+    resultElement.style.color = "gray";
+    if (temporaryResult) {
+      resultElement.value = resultElement.value.replace(temporaryResult, "");
+    }
+    temporaryResult = result;
+    resultElement.value = resultElement.value.trim() + "\n" + temporaryResult;
+    resultElement.scrollTop = resultElement.scrollHeight;
+  } else if (status === "FINAL_A1") {
+    resultElement.style.color = "blue";
+    if (temporaryResult) {
+      resultElement.value = resultElement.value.replace(temporaryResult, "");
+    }
+    resultElement.value = resultElement.value.trim() + "\n" + result + "\n";
+    temporaryResult = "";
+    resultElement.scrollTop = resultElement.scrollHeight;
   }
 }
 
@@ -63,19 +50,19 @@ function printSttResult(result, status) {
 function printLLMResult(llmText) {
   var llmResultElement = document.getElementById("llmresult");
   llmResultElement.value = "LLM analysis result: \n" + llmText;
-  llmResultElement.scrollTop = llmResultElement.scrollHeight; // 스크롤을 항상 최하단으로 유지
+  llmResultElement.scrollTop = llmResultElement.scrollHeight;
 }
 
-// LLM API 호출 함수
+// app.js - LLM API 호출 함수
 function sendSttResultForLLMAnalysis(sttText) {
-  fetch("/api/dent_summary", {
+  fetch("http://localhost:5000/api/llm", {
     method: "POST",
-    credentials: "same-origin",
     headers: {
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
       text: sttText,
+      llmToken: llmToken,
     }),
   })
     .then((response) => {
@@ -86,8 +73,9 @@ function sendSttResultForLLMAnalysis(sttText) {
       }
     })
     .then((data) => {
+      console.log(data);
       if (data && data.result) {
-        printLLMResult(data.result); // 요약 결과 출력
+        printLLMResult(data.result);
       } else {
         printLLMResult("LLM analysis failed.");
       }
@@ -102,129 +90,227 @@ function sendSttResultForLLMAnalysis(sttText) {
 function clearResults() {
   var sttResult = document.getElementById("sttresult");
   var llmResult = document.getElementById("llmresult");
-  sttResult.value = ""; // STT 결과 초기화
-  llmResult.value = ""; // LLM 결과 초기화
+  sttResult.value = "";
+  llmResult.value = "";
   console.log("STT and LLM results cleared");
 }
 
+// STT 토큰 받기 함수 (async)
+async function getSTTToken() {
+  try {
+    const response = await fetch("http://localhost:5000/api/auth/token/stt", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        accessToken: accessToken,
+        userId: userId,
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error("Request failed");
+    }
+
+    const contentType = response.headers.get("content-type");
+    if (contentType && contentType.includes("application/json")) {
+      const data = await response.json();
+      sttToken = data.sttToken;
+      console.log("STT Token:", sttToken);
+      return sttToken;
+    } else {
+      throw new Error("Invalid response format");
+    }
+  } catch (error) {
+    console.error("Error getting STT Token:", error);
+    return null;
+  }
+}
+
+// LLM 토큰 받기 함수 (async)
+async function getLLMToken() {
+  try {
+    const response = await fetch("http://localhost:5000/api/auth/token/llm", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        accessToken: accessToken,
+        userId: userId,
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error("Request failed");
+    }
+
+    const contentType = response.headers.get("content-type");
+    if (contentType && contentType.includes("application/json")) {
+      const data = await response.json();
+      llmToken = data.llmToken;
+      console.log("LLM Token:", llmToken);
+      return llmToken;
+    } else {
+      throw new Error("Invalid response format");
+    }
+  } catch (error) {
+    console.error("Error getting LLM Token:", error);
+    return null;
+  }
+}
+
 // Init & load
-document.addEventListener("DOMContentLoaded", function () {
+document.addEventListener("DOMContentLoaded", async function () {
   var micBtn = document.querySelector("#micBtn");
   var sttResult = document.getElementById("sttresult");
   var llmResult = document.getElementById("llmresult");
 
-  micBtn.onclick = function () {
-    // 마이크가 켜질 때 STT와 LLM 초기화
-    clearResults();
+  try {
+    const [sttTokenResult, llmTokenResult] = await Promise.all([
+      getSTTToken(),
+      getLLMToken(),
+    ]);
 
-    if (wavesurfer === undefined) {
-      if (isSafari) {
-        var AudioContext = window.AudioContext || window.webkitAudioContext;
-        context = new AudioContext({
-          sampleRate: 16000,
-        });
-        processor = context.createScriptProcessor(4096, 1, 1);
-      }
+    if (sttTokenResult && llmTokenResult) {
+      console.log("Both tokens received. Ready to start WebSocket.");
 
-      // Init wavesurfer
-      wavesurfer = WaveSurfer.create({
-        container: "#waveform",
-        waveColor: "black",
-        interact: false,
-        cursorWidth: 0,
-        audioContext: context || null,
-        audioScriptProcessor: processor || null,
-        plugins: [
-          WaveSurfer.microphone.create({
-            bufferSize: 4096,
-            numberOfInputChannels: 1,
-            numberOfOutputChannels: 1,
-            constraints: {
-              video: false,
-              audio: true,
-            },
-          }),
-        ],
-      });
+      micBtn.onclick = function () {
+        // 마이크가 활성화된 상태라면 멈추고 LLM 요청을 보냄
+        if (wavesurfer && wavesurfer.microphone.active) {
+          wavesurfer.microphone.stop();
 
-      wavesurfer.microphone.on("deviceReady", function (stream) {
-        console.info("Device ready!", stream);
-      });
-
-      ws = new WebSocket(webServerURL);
-      ws.onmessage = function (event) {
-        if (event.data != "") {
-          console.info(event.data);
-          const obj = JSON.parse(event.data);
+          // WebSocket 닫기 전에 상태 확인
           if (
-            obj.status == "FINAL" ||
-            obj.status == "PARTIAL" ||
-            obj.status == "FINAL_A1"
+            ws &&
+            (ws.readyState === WebSocket.OPEN ||
+              ws.readyState === WebSocket.CONNECTING)
           ) {
-            if (obj.results[0].sentence != 0) {
-              var trimmedResult = obj.results[0].sentence.trim();
-              printSttResult(trimmedResult, obj.status);
-              console.info(trimmedResult);
-              console.log("test", obj);
-
-              if (trimmedResult.includes("stop")) {
-                console.log("Condition met: 'stop' found in sentence.");
-                printLLMResult("Converting...");
-                micBtn.click(); // 마이크 중지
-              }
-            }
+            ws.close();
+            console.log("WebSocket connection closed.");
           }
+
+          var sttText = sttResult.value.trim();
+          if (sttText) {
+            // STT 결과가 있을 때 LLM 분석 요청
+            sendSttResultForLLMAnalysis(sttText);
+          } else {
+            console.warn("No STT result to send for LLM analysis.");
+          }
+        } else {
+          startMicrophoneAndWebSocket(sttTokenResult);
         }
       };
-
-      wavesurfer.microphone.on("pcmReady", function (b64) {
-        ws.send(b64);
-      });
-
-      wavesurfer.microphone.on("deviceError", function (code) {
-        console.warn("Device error: " + code);
-      });
-      wavesurfer.on("error", function (e) {
-        console.warn(e);
-      });
-      wavesurfer.microphone.start();
     } else {
-      // start/stop mic on button click
-      if (wavesurfer.microphone.active) {
-        wavesurfer.microphone.stop();
-        ws.close();
-        console.log("Microphone stopped");
+      console.error("Failed to get required tokens.");
+    }
+  } catch (error) {
+    console.error("Error initializing tokens:", error);
+  }
+});
 
-        // STT 내용을 LLM API로 전송
-        var sttText = sttResult.value.trim();
-        if (sttText) {
-          sendSttResultForLLMAnalysis(sttText);
+// WebSocket 연결 함수
+function startMicrophoneAndWebSocket(sttToken) {
+  let webServerURL = `wss://medvoice.intelloia.com/api/stt?token=${sttToken}`;
+
+  // 기존 WebSocket이 열려 있으면 다시 열지 않도록 처리
+  if (
+    ws &&
+    (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)
+  ) {
+    console.log("WebSocket is already open or connecting.");
+    return;
+  }
+
+  if (wavesurfer === undefined) {
+    if (isSafari) {
+      var AudioContext = window.AudioContext || window.webkitAudioContext;
+      context = new AudioContext({
+        sampleRate: 16000,
+      });
+      processor = context.createScriptProcessor(4096, 1, 1);
+    }
+
+    wavesurfer = WaveSurfer.create({
+      container: "#waveform",
+      waveColor: "black",
+      interact: false,
+      cursorWidth: 0,
+      audioContext: context || null,
+      audioScriptProcessor: processor || null,
+      plugins: [
+        WaveSurfer.microphone.create({
+          bufferSize: 4096,
+          numberOfInputChannels: 1,
+          numberOfOutputChannels: 1,
+          constraints: {
+            video: false,
+            audio: true,
+          },
+        }),
+      ],
+    });
+
+    wavesurfer.microphone.on("deviceReady", function (stream) {
+      console.info("Device ready!", stream);
+    });
+
+    ws = new WebSocket(webServerURL);
+
+    // WebSocket이 열렸을 때
+    ws.onopen = function () {
+      console.log("WebSocket connection opened.");
+      // WebSocket이 열렸을 때부터 데이터를 전송할 수 있음
+      wavesurfer.microphone.on("pcmReady", function (b64) {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(b64); // WebSocket이 열렸을 때만 데이터를 전송
         } else {
-          console.warn("No STT result to send for LLM analysis.");
+          console.warn("WebSocket is not open. Unable to send data.");
         }
-      } else {
-        wavesurfer.microphone.start();
+      });
+    };
 
-        console.log("Microphone started");
+    ws.onclose = function (event) {
+      console.log("WebSocket closed:", event);
+    };
 
-        ws = new WebSocket(webServerURL);
-        ws.onmessage = function (event) {
-          if (event.data != "") {
-            console.info(event.data);
-            const obj = JSON.parse(event.data);
-            if (
-              obj.status == "FINAL" ||
-              obj.status == "PARTIAL" ||
-              obj.status == "FINAL_A1"
-            ) {
-              if (obj.results[0].sentence != "")
-                printSttResult(obj.results[0].sentence, obj.status);
+    ws.onerror = function (error) {
+      console.error("WebSocket error:", error);
+    };
 
-              printLLMResult("This is an example of LLM analysis output.");
+    ws.onmessage = function (event) {
+      if (event.data != "") {
+        console.info(event.data);
+        const obj = JSON.parse(event.data);
+        if (
+          obj.status == "FINAL" ||
+          obj.status == "PARTIAL" ||
+          obj.status == "FINAL_A1"
+        ) {
+          if (obj.results[0].sentence != "") {
+            var trimmedResult = obj.results[0].sentence.trim();
+            printSttResult(trimmedResult, obj.status);
+            console.info(trimmedResult);
+
+            if (trimmedResult.includes("stop")) {
+              console.log("Condition met: 'stop' found in sentence.");
+              printLLMResult("Converting...");
+              micBtn.click(); // 마이크 중지
             }
           }
-        };
+        }
       }
-    }
-  };
-});
+    };
+
+    wavesurfer.microphone.on("deviceError", function (code) {
+      console.warn("Device error: " + code);
+    });
+
+    wavesurfer.on("error", function (e) {
+      console.warn(e);
+    });
+
+    wavesurfer.microphone.start();
+  }
+}

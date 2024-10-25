@@ -1,69 +1,105 @@
 const express = require("express");
-const path = require("path");
-const fetch = require("node-fetch"); // Node.js의 fetch를 사용하기 위해 node-fetch 설치 필요
+const { createProxyMiddleware } = require("http-proxy-middleware");
+const cors = require("cors"); // CORS 미들웨어 추가
 
 const app = express();
-const PORT = 23006;
+const PORT = 5000;
+app.use(cors());
 
-// POST 요청을 처리하기 위한 미들웨어 설정
+// JSON 파싱 설정
 app.use(express.json());
 
-// static 파일 경로 설정
-app.use(express.static(path.join(__dirname)));
+// STT 토큰 API 프록시
+app.post("/api/auth/token/stt", (req, res) => {
+  const { accessToken, userId } = req.body;
 
-// 기본으로 index.html 제공
-app.get("/", (req, res) => {
-  res.sendFile(path.join(__dirname, "index.html"));
-});
-
-// 외부 API에 대한 프록시 역할을 하는 API 경로 추가
-app.post("/api/dent_summary", async (req, res) => {
-  const { text } = req.body;
-
-  try {
-    console.log("Received text:", text);
-
-    // 외부 API로 POST 요청 보내기
-    console.log("Sending request to external API...");
-    const response = await fetch(
-      "http://app-00.intelloia.com:13008/dent_summary",
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ text }),
+  fetch("https://medvoice.intelloia.com/api/auth/token/stt", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${accessToken}`,
+      userId: `${userId}`,
+    },
+  })
+    .then((response) => {
+      if (!response.ok) {
+        throw new Error("STT Token request failed");
       }
-    );
 
-    console.log("Response status:", response.status);
-
-    // 응답을 텍스트로 받아오기
-    const responseText = await response.text();
-    console.log("External API response:", responseText);
-
-    // 응답을 JSON으로 파싱 시도
-    try {
-      const data = JSON.parse(responseText);
-      console.log("Parsed JSON:", data);
-      res.status(response.status).json(data); // JSON 파싱 성공 시 JSON 데이터 반환
-    } catch (jsonError) {
-      console.error("JSON parsing error:", jsonError);
-      res.status(response.status).send(responseText); // JSON이 아닐 경우 원본 텍스트 반환
-    }
-  } catch (error) {
-    // 에러 디버깅을 위한 추가 로그
-    console.error("Error type:", error.name);
-    console.error("Error message:", error.message);
-    console.error("Error stack:", error.stack);
-
-    // 500 에러 응답
-    res
-      .status(500)
-      .json({ error: "An error occurred while processing the request." });
-  }
+      // 응답 본문이 있을 때만 JSON으로 변환
+      return response.text().then((text) => {
+        // 응답 헤더에서 토큰을 전달하기 위해 expose
+        res.set("Access-Control-Expose-Headers", "Authorization");
+        const sttToken = response.headers.get("Authorization");
+        return text ? { sttToken, body: JSON.parse(text) } : { sttToken };
+      });
+    })
+    .then((data) => {
+      res.json(data); // 응답 데이터 전송
+    })
+    .catch((error) => {
+      console.error("Error:", error);
+      res.status(500).send("STT Token request failed");
+    });
 });
 
+// LLM 토큰 API 프록시
+app.post("/api/auth/token/llm", (req, res) => {
+  const { accessToken, userId } = req.body;
+
+  fetch("https://medvoice.intelloia.com/api/auth/token/llm", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${accessToken}`,
+      userId: `${userId}`,
+    },
+  })
+    .then((response) => {
+      if (!response.ok) {
+        throw new Error("LLM Token request failed");
+      }
+
+      return response.text().then((text) => {
+        // 응답 헤더에서 토큰을 전달하기 위해 expose
+        res.set("Access-Control-Expose-Headers", "Authorization");
+        const llmToken = response.headers.get("Authorization");
+        return text ? { llmToken, body: JSON.parse(text) } : { llmToken };
+      });
+    })
+    .then((data) => {
+      res.json(data); // 응답 데이터 전송
+    })
+    .catch((error) => {
+      console.error("Error:", error);
+      res.status(500).send("LLM Token request failed");
+    });
+});
+// LLM API 프록시 라우트
+app.post("/api/llm", (req, res) => {
+  const { text, llmToken } = req.body;
+
+  fetch("https://medvoice.intelloia.com/api/llm", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${llmToken}`,
+    },
+    body: JSON.stringify({ text }),
+  })
+    .then((response) => {
+      if (!response.ok) {
+        throw new Error("LLM API request failed");
+      }
+      return response.json();
+    })
+    .then((data) => res.json(data)) // 받은 데이터를 그대로 반환
+    .catch((error) => {
+      console.error("Error in LLM API request:", error);
+      res.status(500).json({ error: "LLM analysis failed" });
+    });
+});
+// 서버 실행
 app.listen(PORT, () => {
-  console.log(`Server is running on http://localhost:${PORT}`);
+  console.log(`Proxy server running on http://localhost:${PORT}`);
 });
